@@ -76,6 +76,10 @@ const SETTINGS: &[(&str, &str)] = &[
     ("VICTORY_DYNAMIC_WAIT", "1"),
     // The water's tiled light runs (it is left out on 32-lane hosts otherwise, make.rs).
     ("VICTORY_WATER_LIGHT", "1"),
+    // Texture pieces are placed as before (first block that fits), not fullest block first: that
+    // would change how often an empty block is given back to the card, which has not been counted
+    // yet. The gate (no new block past the line) is on either way.
+    ("VICTORY_POOL_FULLEST", "0"),
     // Light without the title's ray tracing
     ("VICTORY_AMBIENT", "0.8"),
     ("VICTORY_AMBIENT_AIR", "1.5"),

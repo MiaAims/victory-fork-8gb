@@ -508,12 +508,15 @@ impl Memory {
     }
 
     /// Whether the card has room for another arena, by the rule its copy is
-    /// made by ([`crate::shadow::by_address`]: under 97 hundredths of the
-    /// budget; past it the arena lies in the PC's memory and every step of
+    /// made by ([`crate::shadow::by_address`], `crate::resource::by_address_room`:
+    /// under 97 hundredths of the budget with the render targets still to
+    /// come; past it the arena lies in the PC's memory and every step of
     /// every ray crosses the bus). Asked once a frame.
     fn card_room(&mut self) -> bool {
         *self.room.get_or_insert_with(|| {
-            host().and_then(|h| h.video_memory()).is_none_or(|[budget, used, ..]| used + ARENA < budget / 100 * 97)
+            host()
+                .and_then(|h| h.video_memory())
+                .is_none_or(|[budget, used, ..]| crate::resource::by_address_room(budget, used, ARENA))
         })
     }
 
