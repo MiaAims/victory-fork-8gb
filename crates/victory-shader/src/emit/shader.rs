@@ -61,6 +61,24 @@ pub const SLOT_STRIDES_COUNT: u32 = 1 << 21;
 pub const SLOT_MEMORY: u8 = 254;
 /// See [`SLOT_MEMORY`].
 pub const SLOT_FAULTS: u8 = 253;
+/// The root UAV `u<SLOT_GROUP_SCRATCH>` in [`ROOT_CBV_SPACE`]: words the
+/// translation adds to a compute program that do not fit past the program's
+/// own LDS (a host group has 32 KiB). A console wave64 program run as host
+/// waves of 32 needs a counter, and with several console waves in a group
+/// their meeting counters and exchange buffers; a program whose own LDS is
+/// the whole 32 KiB (groups of 1,024 that collect triangles) leaves no room.
+/// Each group takes one of [`GROUP_SCRATCH_SLOTS`] slices of
+/// [`GROUP_SCRATCH_SLICE_DWORDS`] dwords, by its group id; the host keeps
+/// the buffer zeroed at the start and never reads it.
+pub const SLOT_GROUP_SCRATCH: u8 = 251;
+/// Slices of the [`SLOT_GROUP_SCRATCH`] buffer: groups whose ids are this far
+/// apart share one, so no more than this many may run at once (a card runs a
+/// few hundred groups of 1,024 at most).
+pub const GROUP_SCRATCH_SLOTS: u32 = 4096;
+/// Dwords of one slice of the [`SLOT_GROUP_SCRATCH`] buffer (2 KiB).
+pub const GROUP_SCRATCH_SLICE_DWORDS: u32 = 512;
+/// Bytes of the [`SLOT_GROUP_SCRATCH`] buffer (8 MiB).
+pub const GROUP_SCRATCH_BYTES: u64 = GROUP_SCRATCH_SLOTS as u64 * GROUP_SCRATCH_SLICE_DWORDS as u64 * 4;
 /// Entries of the [`SLOT_MEMORY`] directory: title addresses below 128 GiB.
 pub const MEMORY_PAGES: u32 = 1 << 21;
 /// In a directory entry's first dword: shaders do not store there by address

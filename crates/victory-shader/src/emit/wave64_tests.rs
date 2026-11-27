@@ -899,6 +899,141 @@ fn console_waves_of_one_group_meet_on_their_own_in_loops_of_their_own() {
     eprintln!("ran on the hardware device: both console waves' loops, as the console runs them");
 }
 
+/// [`console_waves_of_one_group_meet_on_their_own_in_loops_of_their_own`] with the program's
+/// own LDS the host group's whole 32 KiB, in groups of 128 and of 1,024 threads (two and
+/// sixteen console waves, as the programs that collect triangles for effects: groups of
+/// 1,024 with all 32 KiB). The words the translation adds (the counter of console threads,
+/// the console waves' meeting counters and exchange buffers) no longer fit past it: they go
+/// to the group's slice of the scratch buffer, a root UAV ([`super::SLOT_GROUP_SCRATCH`]),
+/// and every lane still gets what the console gives it. `VICTORY_GROUP_SCRATCH=0` refused
+/// these programs ("LDS for the console waves' meetings past the host's 32 KiB").
+#[test]
+fn console_waves_meet_through_the_scratch_buffer_when_lds_is_full() {
+    let words = [
+        0x3402_0082, // v_lshlrev_b32 v1, 2, v0: this lane's LDS dword
+        0x3A06_00BF, // v_xor_b32 v3, 63, v0
+        0x3406_0682, // v_lshlrev_b32 v3, 2, v3: the partner lane's (other half, same wave)
+        0x4A04_0000, // v_add_nc_u32 v2, s0, v0: the sum starts at s0 + t
+        0x2C0E_0084, // v_lshrrev_b32 v7, 4, v0
+        0x4A0E_0E81, // v_add_nc_u32 v7, 1, v7: rounds (t >> 4) + 1
+        0x7E0A_0280, // v_mov_b32 v5, 0
+        0xBE8E_047E, // s_mov_b64 s[14:15], exec
+        0xD834_0000,
+        0x0000_0201, // loop: ds_write_b32 v1, v2
+        0xD8D8_0000,
+        0x0400_0003, // ds_read_b32 v4, v3
+        0xBF8C_C07F, // s_waitcnt lgkmcnt(0)
+        0x4A04_0902, // v_add_nc_u32 v2, v2, v4
+        0x4A0A_0A81, // v_add_nc_u32 v5, 1, v5
+        0x7DA8_0B07, // v_cmpx_gt_u32 exec, v7, v5: the lanes with rounds left
+        0xBF89_FFF7, // s_cbranch_execnz loop
+        0xBEFE_040E, // s_mov_b64 exec, s[14:15]
+        0xD760_0007,
+        0x0001_7F02, // v_readlane_b32 s7, v2, 63
+        0x4A04_0407, // v_add_nc_u32 v2, s7, v2
+        0xE070_1000,
+        0x8002_0201, // buffer_store_dword v2, v1, s[8:11], 0 offen
+    ];
+    for threads in [128u32, 1024] {
+        let mut native = native_of(&words, true, threads);
+        if let StageIo::Cs(cs) = &mut native.io {
+            cs.rsrc2 |= 64 << 15; // 64 x 512 bytes: all 32 KiB of LDS
+            assert_eq!(cs.lds_bytes(), 32768);
+        }
+        let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+        let back = (0..p.blocks.len())
+            .find(|&b| p.blocks[b].insts.last().is_some_and(|i| i.name() == "s_cbranch_execnz"))
+            .expect("the back edge");
+        let wide = HashSet::from([back]);
+        lower::take_needs();
+        let (wave, shader) = lower::with_pair_meetings(|| lowered_with_wave(&native, &p, &wide));
+        assert_eq!(wave, Some(32), "{threads} threads");
+        assert!(lower::take_needs().is_empty());
+        assert!(
+            shader.root_uavs.contains(&super::SLOT_GROUP_SCRATCH),
+            "{threads} threads: the added words in the scratch buffer"
+        );
+        if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
+            let mut copy = shader.dxil.clone();
+            v.validate(&mut copy).expect("DXIL validation failed");
+        }
+        // the console: each wave's lanes in step, writes before reads
+        let console = |s0: u32| {
+            let n = threads as usize;
+            let mut out = vec![0u32; n];
+            let mut lds = vec![0u32; n];
+            for w in 0..threads / 64 {
+                let lanes = 64 * w..64 * w + 64;
+                let mut sum: Vec<u32> = lanes.clone().map(|t| s0.wrapping_add(t)).collect();
+                for round in 0.. {
+                    let on: Vec<u32> = lanes.clone().filter(|t| round < (t >> 4) + 1).collect();
+                    if on.is_empty() {
+                        break;
+                    }
+                    for &t in &on {
+                        lds[t as usize] = sum[(t - 64 * w) as usize];
+                    }
+                    for &t in &on {
+                        let k = (t - 64 * w) as usize;
+                        sum[k] = sum[k].wrapping_add(lds[(t ^ 63) as usize]);
+                    }
+                }
+                let last = sum[63];
+                for t in lanes {
+                    out[t as usize] = sum[(t - 64 * w) as usize].wrapping_add(last);
+                }
+            }
+            out
+        };
+        let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(host) = Host::new(false) else {
+            eprintln!("no SM 6.6 hardware device; not run");
+            return;
+        };
+        let (root, pso) = match host.compute_pipeline(&shader) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("the hardware device does not take this program: {e}; not run");
+                return;
+            }
+        };
+        // the root parameters: the user data, then the root views by slot and kind
+        let mut views: Vec<(u8, u8)> = shader
+            .root_cbvs
+            .iter()
+            .map(|&r| (r, 0))
+            .chain(shader.root_srvs.iter().map(|&r| (r, 1)))
+            .chain(shader.root_uavs.iter().map(|&r| (r, 2)))
+            .collect();
+        views.sort_unstable();
+        views.dedup();
+        let scratch = 1 + views.iter().position(|&v| v == (super::SLOT_GROUP_SCRATCH, 2)).expect("the root UAV") as u32;
+        for s0 in [0u32, 1000, 0xFFFF_FF00] {
+            let mut ud = vec![0u32; shader.user_data_dwords().max(1) as usize];
+            for u in &shader.user_data {
+                if let (RootType::Constants, 0, 0) = (u.root, u.slot, u.dword) {
+                    ud[u.index as usize] = s0;
+                }
+            }
+            let out = host
+                .dispatch(
+                    &root,
+                    &pso,
+                    &Dispatch {
+                        roots: vec![(0, Root::Constants(ud)), (scratch, Root::Scratch(super::GROUP_SCRATCH_BYTES))],
+                        views: &[View::RawUav(threads)],
+                        samplers: &[],
+                        groups: [1, 1, 1],
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{threads} threads: dispatch failed: {e}"));
+            let want = console(s0);
+            assert_eq!(&out[0][..threads as usize], &want[..], "{threads} threads, s0 = {s0:#x}");
+        }
+        eprintln!("ran on the hardware device: {threads} threads, all 32 KiB of LDS the program's");
+    }
+}
+
 /// Which LDS accesses need the host waves of their console wave to meet
 /// ([`lower::LdsOrder`]): before a barrier a lane writes its dword and reads it back (the
 /// order counts); after it the lanes read and add with atomics only (it does not: a read

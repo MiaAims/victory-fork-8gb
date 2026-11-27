@@ -66,10 +66,13 @@ are in the script):
   lightning; runs 2026-11-27 20:52 and 21:02). The one program dropped in play
   is the compute program `6b82bc7d22016cb5`, an effects pass that collects
   triangles: a wave64 program in groups of 1,024 with no form for 32-lane cards
-  ("no wave32 lowering"). The widened form that fixed the volumetric light does
-  not fit it, since its shared memory is a host group's whole 32 KiB. Whether
-  its dropped dispatches are what flickers is not proven; no fork has a fix
-  yet.
+  ("no wave32 lowering"). The widened form that fixed the volumetric light did
+  not fit it, since its shared memory is a host group's whole 32 KiB. Now the
+  words that form adds go to a slice per group of an 8 MiB scratch buffer
+  (`u251`, `VICTORY_GROUP_SCRATCH=0` turns it off), and that program and the
+  other one like it translate, pass the DXIL validator and are taken by the
+  RTX 3070's driver; a test runs the form on the card in groups of 128 and
+  1,024 with all 32 KiB the program's. *Not yet seen in play.*
 - **Pipelines with static samplers are built at every start.** The layer does
   not keep them (a kept one can read through another one's sampler on NVIDIA);
   NVIDIA's own shader cache can. NVIDIA Control Panel → Manage 3D settings →

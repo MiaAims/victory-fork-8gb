@@ -10820,6 +10820,27 @@ impl Host {
         }
     }
 
+    /// The GPU address of the group scratch buffer
+    /// ([`victory_shader::emit::SLOT_GROUP_SCRATCH`]): the words translations
+    /// add past a compute program's LDS where the program's own fills the
+    /// host group's 32 KiB, a slice per group. Made once, zeroed as made,
+    /// kept for the process; `None` if it could not be made.
+    pub(crate) fn group_scratch(&self) -> Option<u64> {
+        static SCRATCH: OnceLock<Option<u64>> = OnceLock::new();
+        *SCRATCH.get_or_init(|| {
+            let buffer = self.uav_buffer(victory_shader::emit::GROUP_SCRATCH_BYTES)?;
+            // SAFETY: a plain query of a live buffer.
+            let gpu = unsafe { buffer.GetGPUVirtualAddress() };
+            tracing::info!(
+                mb = victory_shader::emit::GROUP_SCRATCH_BYTES >> 20,
+                "the group scratch buffer is made (programs whose own LDS fills the group's 32 KiB)"
+            );
+            // Kept for the process: every list that binds it may still run.
+            std::mem::forget(buffer);
+            Some(gpu)
+        })
+    }
+
     /// A device-local buffer shaders may write (unordered access) and indirect
     /// execution may read, starting in the common state.
     pub(crate) fn uav_buffer(&self, size: u64) -> Option<ID3D12Resource> {

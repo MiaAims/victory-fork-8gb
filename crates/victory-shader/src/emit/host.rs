@@ -630,6 +630,10 @@ pub enum Root {
         srv: bool,
         data: Vec<u32>,
     },
+    /// A root UAV over a zeroed buffer of this many bytes that nothing reads
+    /// back (the group scratch buffer, [`super::SLOT_GROUP_SCRATCH`];
+    /// [`Host::dispatch`] only).
+    Scratch(u64),
 }
 
 /// Bindings for [`Host::draw`]: root arguments and the heap contents.
@@ -867,7 +871,7 @@ impl Host {
                         at.ptr += (index * size) as u64;
                         list.SetGraphicsRootDescriptorTable(*param, at);
                     }
-                    Root::View { .. } => return Err("root views in a draw".into()),
+                    Root::View { .. } | Root::Scratch(_) => return Err("root views in a draw".into()),
                 }
             }
             list.OMSetRenderTargets(1, Some(&rtv), false, None);
@@ -1494,6 +1498,15 @@ impl Host {
                         } else {
                             list.SetComputeRootConstantBufferView(*param, va);
                         }
+                        keep.push(b);
+                    }
+                    Root::Scratch(bytes) => {
+                        let b = make(
+                            D3D12_HEAP_TYPE_DEFAULT,
+                            &buffer(*bytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
+                            D3D12_RESOURCE_STATE_COMMON,
+                        )?;
+                        list.SetComputeRootUnorderedAccessView(*param, b.GetGPUVirtualAddress());
                         keep.push(b);
                     }
                 }

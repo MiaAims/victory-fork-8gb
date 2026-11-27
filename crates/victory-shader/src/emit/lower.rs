@@ -389,6 +389,12 @@ struct Lower<'a> {
     /// exchange dwords ([`Self::exchange_dword`], made in the entry block).
     pair_waves: u32,
     pair_base: Option<V>,
+    /// The words the translation adds past the program's LDS (`halves`, `ticket`, `pairs`'
+    /// counters and buffers, `exchange`) are in the group's slice of
+    /// [`super::shader::SLOT_GROUP_SCRATCH`], as they do not fit past it ([`own_words`]): the
+    /// first of their dword numbers, and the slice's first byte (made in the entry block).
+    own: Option<u32>,
+    own_base: Option<V>,
     /// Vertex and mesh outputs holding 16-bit values: row, whether two per
     /// dword, and the row packed after it.
     half_outputs: HashMap<u8, (bool, Option<u8>)>,
@@ -1371,6 +1377,19 @@ thread_local! {
 /// LDS dwords a host thread group has (D3D12: 32 KiB).
 const HOST_LDS_DWORDS: u32 = 8192;
 
+/// Where the words the translation adds past a compute program's `program` LDS dwords go,
+/// when the program and they come to `all` dwords: the first of their numbers if they go to
+/// the group's slice of [`super::shader::SLOT_GROUP_SCRATCH`] (they do not fit past the
+/// program in the host's 32 KiB, and fit in a slice), else `None` (they stay in LDS).
+/// `VICTORY_GROUP_SCRATCH=0`: always `None`, as before (such a program is refused).
+pub(super) fn own_words(program: u32, all: u32) -> Option<u32> {
+    let on = std::env::var_os("VICTORY_GROUP_SCRATCH").is_none_or(|v| v != "0");
+    (on && all > HOST_LDS_DWORDS
+        && program <= HOST_LDS_DWORDS
+        && all - program <= super::shader::GROUP_SCRATCH_SLICE_DWORDS)
+        .then_some(program)
+}
+
 /// Runs `f` with the two host waves of each console wave meeting on their own
 /// ([`Lower::meet`]) in console wave64 programs on 32-lane hosts whose thread group holds
 /// several console waves, instead of with the whole group. Every console wave of such a group
@@ -1989,6 +2008,15 @@ impl<'a> Lower<'a> {
         } else {
             HashSet::new()
         };
+        // The words added past the program's LDS, in the group's scratch slice where they do
+        // not fit past it ([`own_words`]).
+        let own = match &x.native.io {
+            StageIo::Cs(cs) => own_words(cs.lds_bytes() / 4, s.lds_dwords),
+            _ => None,
+        };
+        if let Some(first) = own {
+            s.lds_dwords = first;
+        }
         let mut no_barrier = HashSet::new();
         if let StageIo::Ms(ms) = &x.native.io {
             s.prims = x.prims.clone();
@@ -2131,6 +2159,8 @@ impl<'a> Lower<'a> {
             lds_started: false,
             pair_waves,
             pair_base: None,
+            own,
+            own_base: None,
             flat: None,
             no_barrier,
             fence_only,
@@ -4792,11 +4822,9 @@ impl<'a> Lower<'a> {
         let (e, i32t) = (self.s.entry, self.s.t.i32);
         let w = self.s.wave_size.unwrap_or(32);
         let group: u32 = self.s.threads.map_or(w, |t| t.iter().product());
-        let lds = self.s.lds();
         let k = self.s.m.i32(slot);
-        let ptr = self.s.m.element(e, lds, k);
         let zero = self.s.m.i32(0);
-        self.s.m.store(e, ptr, zero);
+        self.own_store(e, k, zero);
         if let (Some(first), StageIo::Cs(cs)) = (self.pairs, &self.x.native.io) {
             // the console waves' meeting counters too: thread n zeroes counter n (the last one
             // past them)
@@ -4808,8 +4836,7 @@ impl<'a> Lower<'a> {
             let n = self.s.m.select(e, past, last, flat);
             let first = self.s.m.i32(first);
             let at = self.s.m.bin(e, Bin::Add, first, n);
-            let ptr = self.s.m.element(e, lds, at);
-            self.s.m.store(e, ptr, zero);
+            self.own_store(e, at, zero);
         }
         self.group_sync(e);
         let one = self.s.m.i32(1);
@@ -4823,8 +4850,7 @@ impl<'a> Lower<'a> {
         let high = self.s.m.bin(e, Bin::Shl, count, sixteen);
         let take = self.s.m.select(e, full, kw, high);
         let add = self.s.m.select(e, first, take, zero);
-        let ptr = self.s.m.element(e, lds, k);
-        let old = self.s.m.atomic(e, Rmw::Add, ptr, add);
+        let old = self.own_add(e, k, add);
         let found = self.s.op(e, "waveReadLaneFirst.i32", Attr::NoUnwind, i32t, 118, &[old]);
         let low_mask = self.s.m.i32(0xffff);
         let low = self.s.m.bin(e, Bin::And, found, low_mask);
@@ -4928,21 +4954,20 @@ impl<'a> Lower<'a> {
             return;
         }
         let (i1t, i32t, void) = (self.s.t.i1, self.s.t.i32, self.s.t.void);
-        let fence = self.s.m.i32(8);
+        let fence = self.s.m.i32(8 | self.own_fence());
         let head = self.cur;
         self.s.op(head, "barrier", Attr::NoDuplicate, void, 80, &[fence]);
         if super::group_sync() == 0 {
             return;
         }
         let index = self.meeting_index();
-        let lds = self.s.lds();
-        let ptr = self.s.m.element(head, lds, index);
         let (zero, one) = (self.s.m.i32(0), self.s.m.i32(1));
         // (one lane of the host wave counts it in; every lane learns what it found)
         let first = self.s.op(head, "waveIsFirstLane", Attr::NoUnwind, i1t, 110, &[]);
         self.s.flags |= flags::WAVE_OPS;
         let at = self.begin_guarded(Some(first));
-        let old = self.s.m.atomic(self.cur, Rmw::Add, ptr, one);
+        let c = self.cur;
+        let old = self.own_add(c, index, one);
         let none = self.s.m.undef(i32t);
         let old = self.end_guarded(at, &[(old, none)])[0];
         let c = self.cur;
@@ -4954,7 +4979,8 @@ impl<'a> Lower<'a> {
         self.s.m.terminate(c, Term::Br(wait));
         let n = self.s.m.phi(wait, i32t);
         self.s.op(wait, "barrier", Attr::NoDuplicate, void, 80, &[fence]);
-        let now = self.s.m.load(wait, ptr);
+        // (behind the fence just above, which with `own` fences the group's UAV writes too)
+        let now = self.own_load(wait, index);
         let now = self.s.op(wait, "waveReadLaneFirst.i32", Attr::NoUnwind, i32t, 118, &[now]);
         let short = self.s.m.bin(wait, Bin::Sub, now, target);
         let early = self.s.m.cmp(wait, pred::SLT, short, zero);
@@ -4994,9 +5020,7 @@ impl<'a> Lower<'a> {
     fn exchange_dword(&mut self) -> V {
         let c = self.cur;
         let counter = self.meeting_index();
-        let lds = self.s.lds();
-        let ptr = self.s.m.element(c, lds, counter);
-        let now = self.s.m.load(c, ptr);
+        let now = self.own_load(c, counter);
         let i32t = self.s.t.i32;
         let now = self.s.op(c, "waveReadLaneFirst.i32", Attr::NoUnwind, i32t, 118, &[now]);
         self.s.flags |= flags::WAVE_OPS;
@@ -5033,12 +5057,10 @@ impl<'a> Lower<'a> {
         let half = self.s.m.bin(c, Bin::LShr, cl, five);
         let half = self.s.m.bin(c, Bin::Shl, half, one);
         let own = self.s.m.bin(c, Bin::Add, at, half);
-        let lds = self.s.lds();
         for (w, &x) in mine.iter().enumerate() {
             let k = self.s.m.i32(w as u32);
             let dword = self.s.m.bin(c, Bin::Add, own, k);
-            let ptr = self.s.m.element(c, lds, dword);
-            self.s.m.store(c, ptr, x);
+            self.own_store(c, dword, x);
         }
         self.meet();
         let c = self.cur;
@@ -5048,17 +5070,114 @@ impl<'a> Lower<'a> {
                 let k = self.s.m.i32(w as u32);
                 let lo = self.s.m.bin(c, Bin::Add, at, k);
                 let hi = self.s.m.bin(c, Bin::Add, lo, two);
-                let (p0, p1) = (self.s.m.element(c, lds, lo), self.s.m.element(c, lds, hi));
-                (self.s.m.load(c, p0), self.s.m.load(c, p1))
+                (self.own_load(c, lo), self.own_load(c, hi))
             })
             .collect()
     }
 
-    /// A group barrier with an LDS fence in `block`.
+    /// A group barrier with an LDS fence in `block` (and a UAV fence for the group with
+    /// [`Self::own`]).
     fn group_sync(&mut self, block: usize) {
-        let mode = self.s.m.i32(meeting_mode());
+        let mode = self.s.m.i32(meeting_mode() | self.own_fence());
         let void = self.s.t.void;
         self.s.op(block, "barrier", Attr::NoDuplicate, void, 80, &[mode]);
+    }
+
+    /// The bits a barrier of ours adds for the words in the group's scratch slice
+    /// ([`Self::own`]): `UAVFenceThreadGroup` (4), else none.
+    fn own_fence(&self) -> u32 {
+        if self.own.is_some() { 4 } else { 0 }
+    }
+
+    /// With [`Self::own`]: the byte in the scratch buffer of added word `k` (a dword number
+    /// past the program's LDS), in `block`. The group's slice is picked by its id, made in
+    /// the entry block: groups next to each other take slices next to each other, so groups
+    /// that run at once share none (a 1-D dispatch: none of [`GROUP_SCRATCH_SLOTS`] in a row).
+    ///
+    /// [`GROUP_SCRATCH_SLOTS`]: super::shader::GROUP_SCRATCH_SLOTS
+    fn own_byte(&mut self, block: usize, k: V) -> V {
+        use super::shader::{GROUP_SCRATCH_SLICE_DWORDS, GROUP_SCRATCH_SLOTS};
+        let first = self.own.expect("words in the scratch slice");
+        let base = match self.own_base {
+            Some(v) => v,
+            None => {
+                let e = self.s.entry;
+                let ids: Vec<V> = (0..3)
+                    .map(|axis| match self.compute_id("groupId.i32", 94, axis) {
+                        Val::I32(v) => v,
+                        _ => unreachable!("a group id"),
+                    })
+                    .collect();
+                let (ky, kz) = (self.s.m.i32(1031), self.s.m.i32(2053));
+                let y = self.s.m.bin(e, Bin::Mul, ids[1], ky);
+                let z = self.s.m.bin(e, Bin::Mul, ids[2], kz);
+                let n = self.s.m.bin(e, Bin::Add, ids[0], y);
+                let n = self.s.m.bin(e, Bin::Add, n, z);
+                let mask = self.s.m.i32(GROUP_SCRATCH_SLOTS - 1);
+                let slot = self.s.m.bin(e, Bin::And, n, mask);
+                let slice = self.s.m.i32(GROUP_SCRATCH_SLICE_DWORDS * 4);
+                let v = self.s.m.bin(e, Bin::Mul, slot, slice);
+                self.own_base = Some(v);
+                v
+            }
+        };
+        let first = self.s.m.i32(first);
+        let rel = self.s.m.bin(block, Bin::Sub, k, first);
+        let two = self.s.m.i32(2);
+        let bytes = self.s.m.bin(block, Bin::Shl, rel, two);
+        self.s.m.bin(block, Bin::Add, base, bytes)
+    }
+
+    /// Added word `k` (a dword number past the program's LDS) read in `block`: from LDS, or
+    /// from the group's scratch slice ([`Self::own`]).
+    fn own_load(&mut self, block: usize, k: V) -> V {
+        if self.own.is_none() {
+            let lds = self.s.lds();
+            let ptr = self.s.m.element(block, lds, k);
+            return self.s.m.load(block, ptr);
+        }
+        let h = self.s.root_uav_handle(super::shader::SLOT_GROUP_SCRATCH);
+        let byte = self.own_byte(block, k);
+        let (res, iu) = (self.s.t.res_ret, self.s.m.undef(self.s.t.i32));
+        let (mask, align) = (self.s.m.i8(1), self.s.m.i32(4));
+        let r = self.s.op(block, "rawBufferLoad.f32", Attr::ReadOnly, res, 139, &[h, byte, iu, mask, align]);
+        let f = self.s.m.extract(block, r, 0);
+        self.s.m.cast(block, Cast::Bitcast, f, self.s.t.i32)
+    }
+
+    /// Added word `k` written with `x` in `block` ([`Self::own_load`]).
+    fn own_store(&mut self, block: usize, k: V, x: V) {
+        if self.own.is_none() {
+            let lds = self.s.lds();
+            let ptr = self.s.m.element(block, lds, k);
+            self.s.m.store(block, ptr, x);
+            return;
+        }
+        let h = self.s.root_uav_handle(super::shader::SLOT_GROUP_SCRATCH);
+        let byte = self.own_byte(block, k);
+        let (void, iu) = (self.s.t.void, self.s.m.undef(self.s.t.i32));
+        let (mask, align) = (self.s.m.i8(1), self.s.m.i32(4));
+        self.s.op(block, "rawBufferStore.i32", Attr::NoUnwind, void, 140, &[h, byte, iu, x, iu, iu, iu, mask, align]);
+    }
+
+    /// `x` added to added word `k` at once in `block`; what it held before
+    /// ([`Self::own_load`]).
+    fn own_add(&mut self, block: usize, k: V, x: V) -> V {
+        if self.own.is_none() {
+            let lds = self.s.lds();
+            let ptr = self.s.m.element(block, lds, k);
+            return self.s.m.atomic(block, Rmw::Add, ptr, x);
+        }
+        self.own_atomic(block, k, 0, x)
+    }
+
+    /// `atomicBinOp` `code` (0: add) of `x` on added word `k` in the scratch slice.
+    fn own_atomic(&mut self, block: usize, k: V, code: u32, x: V) -> V {
+        let h = self.s.root_uav_handle(super::shader::SLOT_GROUP_SCRATCH);
+        let byte = self.own_byte(block, k);
+        let (i32t, iu) = (self.s.t.i32, self.s.m.undef(self.s.t.i32));
+        let code = self.s.m.i32(code);
+        self.s.op(block, "atomicBinOp.i32", Attr::NoUnwind, i32t, 78, &[h, code, byte, iu, iu, x])
     }
 
     /// `exchange`: each host wave gives `mine` (the same in all its lanes) for its half; both get
@@ -5097,16 +5216,12 @@ impl<'a> Lower<'a> {
         let five = self.s.m.i32(5);
         let half = self.s.m.bin(at, Bin::LShr, cl, five);
         let index = self.s.m.bin(at, Bin::Add, pair, half);
-        let lds = self.s.lds();
-        let ptr = self.s.m.element(at, lds, index);
-        self.s.m.store(at, ptr, mine);
+        self.own_store(at, index, mine);
         self.group_sync(at);
         let one = self.s.m.i32(1);
         let k1 = self.s.m.bin(at, Bin::Add, pair, one);
-        let p0 = self.s.m.element(at, lds, pair);
-        let p1 = self.s.m.element(at, lds, k1);
-        let lo = self.s.m.load(at, p0);
-        let hi = self.s.m.load(at, p1);
+        let lo = self.own_load(at, pair);
+        let hi = self.own_load(at, k1);
         // the slots are written again only after every thread read them
         self.group_sync(at);
         Ok((lo, hi))
@@ -6299,7 +6414,9 @@ impl<'a> Lower<'a> {
                 // Thread-group sync with a shared-memory fence, and a UAV
                 // fence when the program writes UAVs (the waits before an
                 // s_barrier make those writes visible on the console).
-                let mut mode = if self.writes_uavs { 1 | 2 | 8 } else { 1 | 8 };
+                // (The global UAV fence covers the group's scratch slice: a barrier takes one
+                // of the two UAV fences.)
+                let mut mode = if self.writes_uavs { 1 | 2 | 8 } else { 1 | 8 | self.own_fence() };
                 // Without the wait for the group (bit 0) where not every
                 // lane arrives, or where the switch says so.
                 let waits = match super::group_sync() {
@@ -9715,14 +9832,12 @@ impl<'a> Lower<'a> {
                     // needs no second meeting before it is written again)
                     let k = if self.pairs.is_some() { self.exchange_dword() } else { self.exchange_pair(slot) };
                     let at = self.begin_guarded(Some(is));
-                    let lds = self.s.lds();
-                    let ptr = self.s.m.element(self.cur, lds, k);
-                    self.s.m.store(self.cur, ptr, a);
+                    let c = self.cur;
+                    self.own_store(c, k, a);
                     self.end_guarded(at, &[]);
                     self.meet();
                     let c2 = self.cur;
-                    let ptr = self.s.m.element(c2, lds, k);
-                    let r = self.s.m.load(c2, ptr);
+                    let r = self.own_load(c2, k);
                     if self.pairs.is_none() {
                         self.meet();
                     }

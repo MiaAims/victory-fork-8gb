@@ -124,7 +124,8 @@ pub use sampler::StaticSampler;
 pub use lower::{host_settings, set_host_max_wave, set_host_rdna};
 pub use rect::rect_list_gs;
 pub use shader::{
-    MEMORY_FAULTS, MEMORY_PAGES, MEMORY_READ_ONLY, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY, SLOT_STRIDES,
+    GROUP_SCRATCH_BYTES, GROUP_SCRATCH_SLICE_DWORDS, GROUP_SCRATCH_SLOTS, MEMORY_FAULTS, MEMORY_PAGES, MEMORY_READ_ONLY,
+    ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_GROUP_SCRATCH, SLOT_MEMORY, SLOT_STRIDES,
     SLOT_STRIDES_COUNT, SLOT_TABLE_STRIDES, USER_DATA_SPACE, VIEW_INTEGER, VIEW_SIGNED, VIEW_STRIDE_BITS, USER_DISPATCH_THREADS_X, USER_MEMORY_BASE, USER_ROOT_ADDRESS, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
     raw_views, set_raw_views, set_view_heap_limit, view_heap_limit,
 };
@@ -675,7 +676,16 @@ pub fn emit(
             )
             || matches!(native.io, crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() == 128)
                 && c.digest == [0x50, 0xcf, 0x28, 0x32, 0x8b, 0x58, 0x05, 0x3d, 0xa8, 0x9a, 0x8d, 0xa0, 0x1a, 0xa1, 0x23, 0xc6];
-        let wide_on = wide_option.as_ref().map_or(scene_kernel, |v| v == "1");
+        // A program whose own LDS is the host group's whole 32 KiB in groups of several
+        // console waves (the two that collect triangles for effects, groups of 1,024) has no
+        // other form on 32-lane hosts, so it was always dropped: widened, with the words the
+        // translation adds in the group's scratch slice ([`shader::SLOT_GROUP_SCRATCH`]), it
+        // translates. Nothing that translated before changes form. (`VICTORY_GROUP_SCRATCH=0`:
+        // as before.)
+        let full_lds = matches!(native.io, crate::native::StageIo::Cs(cs)
+                if cs.lds_bytes() >= 32768 && cs.threads.iter().product::<u32>() > 64)
+            && lower::own_words(8192, 8193).is_some();
+        let wide_on = wide_option.as_ref().map_or(scene_kernel || full_lds, |v| v == "1");
         // A single guest wave can iterate an active-lane loop until both host
         // halves have finished. The precise latch and convergence conditions
         // for the driver compute route are checked by widen().

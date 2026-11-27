@@ -2193,6 +2193,25 @@ impl State {
                 }
             }
             for &(slot, param) in &stage.root_uavs {
+                if slot == victory_shader::emit::SLOT_GROUP_SCRATCH {
+                    // Ours: the words a translation adds past a program's full LDS.
+                    match crate::host::host().and_then(|h| h.group_scratch()) {
+                        // SAFETY: an open list; the buffer lives as long as the process.
+                        Some(gpu) => unsafe {
+                            if compute {
+                                l.SetComputeRootUnorderedAccessView(param, gpu);
+                            } else {
+                                l.SetGraphicsRootUnorderedAccessView(param, gpu);
+                            }
+                        },
+                        // Without it the program's meetings would read nothing: dropped.
+                        None => {
+                            once!("no group scratch buffer: a program that needs it is dropped");
+                            return false;
+                        }
+                    }
+                    continue;
+                }
                 if slot == victory_shader::emit::SLOT_FAULTS {
                     // Ours: where shaders note the pages they found empty.
                     if let Some(m) = &memory {
