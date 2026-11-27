@@ -46,6 +46,23 @@ try {
     }
 } catch { }
 
+# The layer built from this tree every time. play-foxhound.ps1 builds it only
+# when there is none, so after a change of branch it ran the old one: runs
+# 2026-11-27 19:43-19:57 used a victory.exe from 18:29, of the earlier line
+# (no Streamline, a black Series S picture, 1-2 fps). Cargo does nothing when
+# it is current.
+$repo = Split-Path $PSScriptRoot
+if (Get-Command cargo -ErrorAction SilentlyContinue) {
+    Push-Location $repo
+    try {
+        if ($Build -eq 'diag') { cargo build --locked --profile diag -p victory --features diagnostics }
+        else { cargo build --release --locked -p victory }
+        if ($LASTEXITCODE -ne 0) { Write-Host 'The build failed (above); not starting the old victory.exe.'; return }
+    } finally { Pop-Location }
+} else {
+    Write-Warning 'No cargo: starting whatever victory.exe is in target\, which may be from another branch.'
+}
+
 # DLSS. On Series S the title upscales its picture with its own FidelityFX,
 # whose compute programs do not translate (20 refused, run 2026-11-27 19:50;
 # none on Series X), so without DLSS taking that step the 3D picture and the
