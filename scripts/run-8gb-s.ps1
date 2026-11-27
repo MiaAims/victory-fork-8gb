@@ -4,15 +4,16 @@
 # on top what the 8 GB work on the earlier line of this fork measured.
 #
 #   .\scripts\run-8gb-s.ps1 -Exe 'C:\path\to\game.exe' [-Build diag] [-More @{VICTORY_X='1'}]
+#   .\scripts\run-8gb-s.ps1 -Exe ... -Options @{Dlss='off'; Fps=30}   other play-foxhound.ps1 options, by name
 #
 # Logs go where play-foxhound.ps1 writes them: %LOCALAPPDATA%\victory\logs.
-# Anything play-foxhound.ps1 takes can be given too (-Dlss off, -Fps 30, ...).
 
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
     [ValidateSet('diag', 'release')][string]$Build = 'release',
     [hashtable]$More = @{},
-    [Parameter(ValueFromRemainingArguments = $true)]$Rest
+    # Other options of play-foxhound.ps1, by name (passed on as they are).
+    [hashtable]$Options = @{}
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,4 +44,11 @@ try {
     }
 } catch { }
 
-& (Join-Path $PSScriptRoot 'play-foxhound.ps1') -Exe $Exe -SeriesS -Build $Build -More $eightGb @Rest
+# Every option by name: a positional one lands on whichever parameter comes
+# next (an empty list of leftover arguments once did, on -Res).
+$call = @{} + $Options
+$call.Exe = $Exe
+$call.SeriesS = $true
+$call.Build = $Build
+$call.More = $eightGb
+& (Join-Path $PSScriptRoot 'play-foxhound.ps1') @call
