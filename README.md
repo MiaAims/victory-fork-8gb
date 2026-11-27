@@ -41,8 +41,13 @@ are in the script):
 - `VICTORY_CARD_ROOM_FOR_TARGETS_MB=1536`: the room kept for render targets
   fits Series S targets (about 1,150-1,325 MB). Unset it is 3,072 MB, given up
   only once the targets hold half of it, so about 1.9 GB of the card stayed
-  empty all run while textures waited for room and showed black. *Not yet
-  measured in play.*
+  empty all run while textures waited for room and showed black. With it
+  (run 2026-11-27 20:52) the room kept falls to 0 once the world is loaded and
+  textures load in.
+- fxceless's `2eade68` is taken in: no new texture block past the texture
+  line. In that same run the card's use came to 7,075 of 7,091 MB with 1.0 to
+  1.3 GB free inside texture blocks, the way that commit's long sessions went
+  over the budget and stalled. *Not yet measured here.*
 - DLSS Frame Generation is not made ready: it needs an RTX 40 or later, and
   ready it holds textures to 86 % of the card's budget instead of 90 %.
 - The layer is built before every start. The launcher builds it only when
@@ -57,8 +62,9 @@ are in the script):
   not translate, so with DLSS off, or without NVIDIA's files, the 3D picture
   and loading screens stay black under the interface. The script warns
   before it starts.
-- **Some textures are still black in scenes that load fast**: the 8 GB card is
-  full (the render-target setting above is the fix being tried).
+- **The volumetric clouds flicker with square artifacts** (run 2026-11-27
+  20:52). The log does not name the programs that draw them; the cause is not
+  known yet.
 - **Pipelines with static samplers are built at every start.** The layer does
   not keep them (a kept one can read through another one's sampler on NVIDIA);
   NVIDIA's own shader cache can. NVIDIA Control Panel → Manage 3D settings →
