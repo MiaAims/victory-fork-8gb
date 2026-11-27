@@ -46,6 +46,18 @@ try {
     }
 } catch { }
 
+# DLSS. On Series S the title upscales its picture with its own FidelityFX,
+# whose compute programs do not translate (20 refused, run 2026-11-27 19:50;
+# none on Series X), so without DLSS taking that step the 3D picture and the
+# loading screens stay black under the interface. DLSS needs NVIDIA's files.
+$sl = if ($env:VICTORY_STREAMLINE_DIR) { $env:VICTORY_STREAMLINE_DIR } else { Join-Path (Split-Path $PSScriptRoot) 'nvidia-sdk\Streamline\bin\x64' }
+if ($Options['Dlss'] -eq 'off') {
+    Write-Warning "-Options @{Dlss='off'} on Series S: the title's own upscaler does not run here, so the 3D picture stays black."
+} elseif (-not (Test-Path (Join-Path $sl 'sl.interposer.dll'))) {
+    Write-Warning ("No NVIDIA DLSS files in ${sl}: on Series S the 3D picture stays black without them. " +
+        "Get-NVIDIA-DLSS.cmd in the repository folder fetches them from NVIDIA once (about 70 MB).")
+}
+
 # Every option by name: a positional one lands on whichever parameter comes
 # next (an empty list of leftover arguments once did, on -Res).
 $call = @{} + $Options
