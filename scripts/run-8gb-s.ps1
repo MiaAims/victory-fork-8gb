@@ -16,7 +16,9 @@ param(
     [hashtable]$Options = @{}
 )
 
-$ErrorActionPreference = 'Stop'
+# No $ErrorActionPreference = 'Stop' here: play-foxhound.ps1 runs in this
+# scope's child and inherits it, and Windows PowerShell then stops at the
+# first line victory.exe writes to stderr (its 2>&1 makes each an error).
 
 $eightGb = @{
     # Copies of title buffers in the card's memory, read there by shaders
