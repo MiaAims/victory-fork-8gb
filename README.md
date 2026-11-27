@@ -1,5 +1,75 @@
 # VIctory fork
 
+## This fork: an 8 GB card at the Series S profile
+
+This branch (`8gb-nvidia`) is fxceless's tree, described from the next section
+on, with a launcher and settings for a GeForce card with 8 GB, measured on one
+PC:
+
+| | |
+|---|---|
+| Card | GeForce RTX 3070, 8 GB (a budget of 6.9 to 7.2 GB as Windows counts it) |
+| Processor | Intel Core i7, 16 logical processors |
+| Memory | 32 GB of RAM, system-managed page file |
+| System | Windows 11 Pro |
+| Title | Xbox Series build v1.0.2.1, **Series S profile**, DLSS Quality (720p inside, 1080p out), 30 fps cap |
+
+**How to start it** (it builds the layer from this tree first, then starts
+`scripts/play-foxhound.ps1 -SeriesS` with the settings below; DLSS needs
+`Get-NVIDIA-DLSS.cmd` run once):
+
+```powershell
+.\scripts\run-8gb-s.ps1 -Exe 'D:\path\to\your\dump\game_scarlett_master.exe' -Options @{Fps=30}
+```
+
+**What it gives here** (the layer's own count, runs of 27 November 2026):
+
+| | |
+|---|---|
+| After the world has loaded, quiet scenes | 30 frames a second, held |
+| Busy scenes | 20-30 |
+| Heavy scenes | 17-25: the card takes 15-31 ms a frame |
+| Fast travel, new areas streaming in | dips to 4-14 for some seconds: 60-100 MB of title memory copied a frame, 30-39 ms preparing against a 33 ms frame |
+| The first minute or two after a start | about 3 frames a second while about 1,500 pipelines are built (see below) |
+| Crashes | none at DLSS Quality; at DLAA the title stops itself about 10 s in |
+
+**What `run-8gb-s.ps1` sets, and why** (each measured on this PC; the reasons
+are in the script):
+
+- `VICTORY_CARD_BUFFERS_MB=1280`: copies of title buffers in the card's
+  memory, read there instead of over the bus.
+- `VICTORY_CARD_ROOM_FOR_TARGETS_MB=1536`: the room kept for render targets
+  fits Series S targets (about 1,150-1,325 MB). Unset it is 3,072 MB, given up
+  only once the targets hold half of it, so about 1.9 GB of the card stayed
+  empty all run while textures waited for room and showed black. *Not yet
+  measured in play.*
+- DLSS Frame Generation is not made ready: it needs an RTX 40 or later, and
+  ready it holds textures to 86 % of the card's budget instead of 90 %.
+- The layer is built before every start. The launcher builds it only when
+  there is none, so after a change of branch it ran the old one (a black
+  picture, 1-2 frames a second).
+- A restart from the F1 menu starts `run-8gb-s.ps1` again with what it was
+  given, not the plain launcher (which came back as Series X without DLSS).
+
+**Known here:**
+
+- **DLSS is needed on Series S.** The title's own upscaler (FidelityFX) does
+  not translate, so with DLSS off, or without NVIDIA's files, the 3D picture
+  and loading screens stay black under the interface. The script warns
+  before it starts.
+- **Some textures are still black in scenes that load fast**: the 8 GB card is
+  full (the render-target setting above is the fix being tried).
+- **Pipelines with static samplers are built at every start.** The layer does
+  not keep them (a kept one can read through another one's sampler on NVIDIA);
+  NVIDIA's own shader cache can. NVIDIA Control Panel → Manage 3D settings →
+  Shader Cache Size: 10 GB or Unlimited keeps them between starts.
+- **Windows' commit limit.** The process holds about 22 GB; with a
+  system-managed page file Windows grows it while the world loads, and a frame
+  stalled 408 ms then. A fixed page file of 32,768 MB avoids that.
+- The Series X profile has not been measured with this build on this card.
+
+---
+
 **As of 27 November 2026 this repository is based on
 [VIctory-NVIDIA](https://github.com/trustno1-coder/VIctory-NVIDIA) by
 [trustno1-coder](https://github.com/trustno1-coder).** Its tree at commit
