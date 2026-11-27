@@ -93,6 +93,13 @@ $eightGb.VICTORY_MENU_ARGS = "-Exe $(ConvertTo-Literal $Exe) -Build $Build -More
 # Every option by name: a positional one lands on whichever parameter comes
 # next (an empty list of leftover arguments once did, on -Res).
 $call = @{} + $Options
+# DLSS Frame Generation is not made ready. It needs an RTX 40 or later ("not
+# supported here: no supported adapter found" on the RTX 3070, run 2026-11-27
+# 20:02), and ready it holds textures to 86 % of the card's budget against
+# 90 % without (6,234 MB against 6,524 of 7,249), on a card where textures
+# already wait for room (22,009 waiting at 20:24:52, run 20:16, black in
+# fast scenes). -Options @{FrameGen=$true} still asks for it.
+if (-not $call['FrameGen'] -and -not $call.ContainsKey('NoFrameGenReady')) { $call.NoFrameGenReady = $true }
 $call.Exe = $Exe
 $call.SeriesS = $true
 $call.Build = $Build
