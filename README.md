@@ -62,9 +62,14 @@ are in the script):
   not translate, so with DLSS off, or without NVIDIA's files, the 3D picture
   and loading screens stay black under the interface. The script warns
   before it starts.
-- **The volumetric clouds flicker with square artifacts** (run 2026-11-27
-  20:52). The log does not name the programs that draw them; the cause is not
-  known yet.
+- **Square artifacts flicker in the clouds where there is weather** (rain,
+  lightning; runs 2026-11-27 20:52 and 21:02). The one program dropped in play
+  is the compute program `6b82bc7d22016cb5`, an effects pass that collects
+  triangles: a wave64 program in groups of 1,024 with no form for 32-lane cards
+  ("no wave32 lowering"). The widened form that fixed the volumetric light does
+  not fit it, since its shared memory is a host group's whole 32 KiB. Whether
+  its dropped dispatches are what flickers is not proven; no fork has a fix
+  yet.
 - **Pipelines with static samplers are built at every start.** The layer does
   not keep them (a kept one can read through another one's sampler on NVIDIA);
   NVIDIA's own shader cache can. NVIDIA Control Panel → Manage 3D settings →
