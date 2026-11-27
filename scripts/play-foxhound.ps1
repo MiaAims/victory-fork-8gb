@@ -121,6 +121,12 @@ $settings.VICTORY_MENU_FPS = [string]$fpsWanted
 $settings.VICTORY_MENU_FILE = $menuFile
 $settings.VICTORY_MENU_PLAY = $MyInvocation.MyCommand.Path
 $settings.VICTORY_MENU_ARGS = "-Exe '$($Exe -replace "'", "''")' -Build $Build$(if ($NoFrameGenReady) { ' -NoFrameGenReady' })"
+# A script that starts this one (scripts\run-8gb-s.ps1) can name itself and its own arguments for the
+# menu's restart through -More, so that a restart starts it again and not this script alone.
+if ($More['VICTORY_MENU_PLAY']) {
+    $settings.VICTORY_MENU_PLAY = $More['VICTORY_MENU_PLAY']
+    $settings.VICTORY_MENU_ARGS = [string]$More['VICTORY_MENU_ARGS']
+}
 
 $victory = Join-Path $repo "target\$Build\victory.exe"
 if (-not (Test-Path $victory)) {

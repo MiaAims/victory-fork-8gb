@@ -75,6 +75,21 @@ if ($Options['Dlss'] -eq 'off') {
         "Get-NVIDIA-DLSS.cmd in the repository folder fetches them from NVIDIA once (about 70 MB).")
 }
 
+# The F1 menu's restart starts this script again with what it was given, not
+# play-foxhound.ps1 alone: that once came back as Series X without DLSS, the
+# frame cap or these settings (run 2026-11-27 20:11). What the menu saved still
+# goes over these at every start.
+function ConvertTo-Literal($v) {
+    if ($v -is [bool] -or $v -is [System.Management.Automation.SwitchParameter]) { return $(if ($v) { '$true' } else { '$false' }) }
+    if ($v -is [int] -or $v -is [long] -or $v -is [double]) { return [string]$v }
+    "'" + ([string]$v -replace "'", "''") + "'"
+}
+function ConvertTo-HashLiteral([hashtable]$h) {
+    '@{' + (($h.Keys | Sort-Object | ForEach-Object { "$_=$(ConvertTo-Literal $h[$_])" }) -join '; ') + '}'
+}
+$eightGb.VICTORY_MENU_PLAY = $MyInvocation.MyCommand.Path
+$eightGb.VICTORY_MENU_ARGS = "-Exe $(ConvertTo-Literal $Exe) -Build $Build -More $(ConvertTo-HashLiteral $More) -Options $(ConvertTo-HashLiteral $Options)"
+
 # Every option by name: a positional one lands on whichever parameter comes
 # next (an empty list of leftover arguments once did, on -Res).
 $call = @{} + $Options
