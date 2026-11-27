@@ -4824,6 +4824,20 @@ float4 lit() : SV_Target { return 1.0; }
         assert_eq!(line_for(0), 0);
     }
 
+    /// Series S targets on an 8 GB card (run 2026-11-27 20:40, about 1,150
+    /// MB): under half of the default 3072 they never settle and 1.9 GB stays
+    /// kept all run; with `VICTORY_CARD_ROOM_FOR_TARGETS_MB=1536`
+    /// (scripts/run-8gb-s.ps1) they settle and nothing is kept.
+    #[test]
+    fn series_s_targets_settle_under_the_8gb_setting() {
+        const MIB: u64 = 1 << 20;
+        let targets = 1150 * MIB;
+        assert_eq!(targets_kept(3072 * MIB, targets, 600_000, 20_000), 1922 * MIB);
+        assert_eq!(targets_kept(1536 * MIB, targets, 20_000, 20_000), 0);
+        // Still growing: what they do not hold yet is kept.
+        assert_eq!(targets_kept(1536 * MIB, targets, 5_000, 20_000), 386 * MIB);
+    }
+
     /// The room kept for render targets goes once the world's targets are
     /// made and have stopped growing, and comes back when they grow again.
     #[test]

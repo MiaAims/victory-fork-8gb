@@ -28,6 +28,16 @@ $eightGb = @{
     # to 174-187 ms with 1280. Not measured on this tree yet: '512' for its
     # own default.
     VICTORY_CARD_BUFFERS_MB = '1280'
+    # Room kept on the card for the title's render targets. Unset it is 3072
+    # MB, given up only once the targets hold half of it (1536) and stop
+    # growing for 20 s (resource.rs, targets_room_kept); the Series S targets
+    # are 1,150-1,325 MB, never half, so about 1.9 GB of the 8 GB card stayed
+    # kept for them all run while textures waited for room and showed black
+    # (run 2026-11-27 20:40: "1920 MB kept for render targets ... no room,
+    # new textures wait", 1,224-14,438 waiting in play). At 1536 they are half
+    # of it, and the room goes to textures once they settle; it is kept again
+    # whenever they grow by 64 MB.
+    VICTORY_CARD_ROOM_FOR_TARGETS_MB = '1536'
 }
 # What the caller gives goes over these.
 foreach ($k in $More.Keys) { $eightGb[$k] = $More[$k] }
